@@ -1,0 +1,40 @@
+version: '3.8'
+networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.96.88.0/22
+services:
+  edgex-trading-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: edgex-trading-bot
+    restart: 'no'
+    environment:
+      # EdgeX API Configuration
+      - EDGEX_BASE_URL=${EDGEX_BASE_URL:-https://pro.edgex.exchange}
+      - EDGEX_WS_URL=${EDGEX_WS_URL:-wss://quote.edgex.exchange}
+
+      # Authentication (REQUIRED - set these in .env file)
+      - EDGEX_ACCOUNT_ID=${EDGEX_ACCOUNT_ID}
+      - EDGEX_STARK_PRIVATE_KEY=${EDGEX_STARK_PRIVATE_KEY}
+
+      # Trading Configuration
+      - EDGEX_LEVERAGE=${EDGEX_LEVERAGE:-2.0}
+
+      # Logging Configuration
+      - EDGEX_DEBUG_LOGGING=${EDGEX_DEBUG_LOGGING:-true}
+      - EDGEX_LOG_FILE=/app/logs/log.txt
+    volumes:
+      # Mount logs directory to host for persistence
+      - ./logs:/app/logs
+      # Mount .env file for environment variables
+      - ./.env:/app/.env:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.path.exists('/app/logs/log.txt') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
