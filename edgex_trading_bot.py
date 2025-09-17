@@ -66,23 +66,27 @@ logger = logging.getLogger(__name__)
 # Default leverage for trading
 LEVERAGE = 2.0
 # Time in seconds between each trading loop iteration
-REFRESH_INTERVAL = 30
+REFRESH_INTERVAL = 120
 # Minimum time in seconds to wait between placing orders
 MIN_ORDER_INTERVAL = 3.0
 # Time in seconds to wait after startup before placing the first order
 STARTUP_DELAY = 2
 # The amount to trade. Unit is determined by ORDER_SIZE_IN_QUOTE.
-TRADE_AMOUNT = 295.0
+TRADE_AMOUNT = 250.0
 # Set to True to interpret TRADE_AMOUNT as quote currency (USD), False for base currency (e.g., PAXG)
 ORDER_SIZE_IN_QUOTE = True
 # Time to wait after cancelling an order before placing a new one, to allow balance to update
 POST_CANCELLATION_DELAY = 0.25
 # Maximum total trading volume in USD before the bot stops trading
-MAX_TOTAL_VOLUME_USD = 85000.0
+# Based on API analysis: current historical volume is ~$51,107.64
+# Setting limit to allow for additional trading room
+MAX_TOTAL_VOLUME_USD = 80500.0
+# Balance snapshot file path
+BALANCE_SNAPSHOT_FILE = "balance_snapshots.txt"
 
 # --- SPREAD CONFIGURATION ---
 # Set to True to use Avellaneda-based deltas for spread calculation.
-USE_AVELLANEDA_SPREAD = False
+USE_AVELLANEDA_SPREAD = True
 # Path to the Avellaneda parameters JSON file.
 AVELLANEDA_PARAMS_FILE = "avellaneda_parameters_PAXG.json"
 # Number of ticks to place orders away from the last price when creating a synthetic spread (used if USE_AVELLANEDA_SPREAD is False).
@@ -151,6 +155,7 @@ class EdgeXTradingBot:
         self.bot_start_time = None  # Track when bot started
         self.last_ticker_update_time: Optional[float] = None
         self.order_monitor_task: Optional[asyncio.Task] = None
+        self.last_balance_snapshot_time = None  # Track when we last saved a balance snapshot
 
     async def initialize(self):
         """Initialize the trading bot."""
@@ -422,6 +427,35 @@ class EdgeXTradingBot:
 
         logger.debug(f"Order fee calculation - notional: {notional_value}, rate: {fee_rate}, fee: {fee}")
         return fee
+
+    def _save_balance_snapshot(self):
+        """Save account balance snapshot to file when no position exists (max once every 5 minutes)."""
+        try:
+            if not self.account_balance:
+                logger.debug("No account balance available for snapshot")
+                return
+
+            current_time = time.time()
+
+            # Check if 5 minutes have passed since last snapshot
+            if self.last_balance_snapshot_time is not None:
+                time_since_last_snapshot = current_time - self.last_balance_snapshot_time
+                if time_since_last_snapshot < 300:  # 300 seconds = 5 minutes
+                    logger.debug(f"Skipping balance snapshot - only {time_since_last_snapshot:.1f}s since last snapshot (need 300s)")
+                    return
+
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            snapshot_line = f"[{timestamp}] Total: {self.account_balance:.4f} USD (No Position - Placing Buy Orders)\n"
+
+            # Append to file
+            with open(BALANCE_SNAPSHOT_FILE, 'a', encoding='utf-8') as f:
+                f.write(snapshot_line)
+
+            self.last_balance_snapshot_time = current_time
+            logger.info(f"💾 Balance snapshot saved: Total: {self.account_balance:.4f} USD")
+
+        except Exception as e:
+            logger.warning(f"Failed to save balance snapshot: {e}")
 
     def _check_sufficient_balance(self, price: Decimal, size: Decimal, is_buy: bool = True) -> bool:
         """Check if account has sufficient balance for the order."""
@@ -703,6 +737,7 @@ class EdgeXTradingBot:
             logger.debug(f"Position fetch exception: {type(e).__name__}: {e}")
             return None
 
+
     async def _calculate_total_traded_volume(self) -> tuple[Decimal, bool]:
         """
         Calculate total traded volume across all contracts for this account.
@@ -720,6 +755,7 @@ class EdgeXTradingBot:
             offset_data = ""
 
             # Get all order fill transactions with pagination
+            # Based on testing: API provides complete historical data without time filtering
             while True:
                 params = OrderFillTransactionParams(
                     size="100",
@@ -740,14 +776,18 @@ class EdgeXTradingBot:
                     logger.debug("No more transactions found")
                     break
 
-                # Sum up all fillValue amounts
+                # Sum up all fillValue amounts for target contract
                 page_volume = Decimal("0")
+                target_contract_count = 0
                 for transaction in transactions:
-                    fill_value = Decimal(str(transaction.get("fillValue", "0")))
-                    page_volume += fill_value
+                    contract_id = transaction.get("contractId")
+                    if contract_id == self.contract_id:
+                        fill_value = Decimal(str(transaction.get("fillValue", "0")))
+                        page_volume += fill_value
+                        target_contract_count += 1
 
                 total_volume += page_volume
-                logger.debug(f"Page volume: {page_volume}, Running total: {total_volume}")
+                logger.debug(f"Page: {len(transactions)} total transactions, {target_contract_count} for target contract, ${page_volume:,.2f} page volume")
 
                 # Check if there are more pages
                 if not data.get("hasNext", False):
@@ -762,7 +802,8 @@ class EdgeXTradingBot:
 
             if should_continue:
                 remaining = max_volume - total_volume
-                logger.info(f"💹 Total Traded Volume: ${total_volume:,.2f} USD (${remaining:,.2f} remaining until ${max_volume:,.2f} limit)")
+                percentage_used = (total_volume / max_volume) * 100
+                logger.info(f"💹 Total Traded Volume: ${total_volume:,.2f} USD ({percentage_used:.1f}% of ${max_volume:,.2f} limit, ${remaining:,.2f} remaining)")
             else:
                 logger.warning(f"🛑 MAXIMUM VOLUME REACHED: ${total_volume:,.2f} USD >= ${max_volume:,.2f} USD - STOPPING TRADING")
 
@@ -837,7 +878,8 @@ class EdgeXTradingBot:
     async def _execute_trading_decision(self):
         """Execute the appropriate trading decision based on current position."""
         if self.current_position is None:
-            # No position - place buy order
+            # No position - save balance snapshot and place buy order
+            self._save_balance_snapshot()
             logger.info("💰 No position found, attempting to place buy order...")
             logger.debug("Trading decision: BUY (no position)")
             await self._place_buy_order()
