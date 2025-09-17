@@ -30,6 +30,8 @@ services:
     volumes:
       # Mount logs directory to host for persistence
       - ./logs:/app/logs
+      - ./balance_snapshots.txt:/app/balance_snapshots.txt
+      - ./edgex_trading_bot.py:/app/edgex_trading_bot.py
       # Mount .env file for environment variables
       - ./.env:/app/.env:ro
     healthcheck:
