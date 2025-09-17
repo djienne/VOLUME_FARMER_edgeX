@@ -86,7 +86,7 @@ BALANCE_SNAPSHOT_FILE = "balance_snapshots.txt"
 
 # --- SPREAD CONFIGURATION ---
 # Set to True to use Avellaneda-based deltas for spread calculation.
-USE_AVELLANEDA_SPREAD = True
+USE_AVELLANEDA_SPREAD = False
 # Path to the Avellaneda parameters JSON file.
 AVELLANEDA_PARAMS_FILE = "avellaneda_parameters_PAXG.json"
 # Number of ticks to place orders away from the last price when creating a synthetic spread (used if USE_AVELLANEDA_SPREAD is False).
