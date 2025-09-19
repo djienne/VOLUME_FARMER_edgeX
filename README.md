@@ -4,6 +4,8 @@ This bot implements a simple automated market-making strategy for the PAXGUSD pe
 
 The bot is designed to run until it reaches a predefined trading volume (`MAX_TOTAL_VOLUME_USD`), at which point it will gracefully shut down by closing any open position and cancelling all orders.
 
+Referral link to support this work: https://pro.edgex.exchange/referral/FREQTRADE .
+
 ## File Structure
 
 Here is a brief description of the key files in this project:
